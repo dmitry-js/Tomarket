@@ -43,7 +43,7 @@ class Tapper:
         self.proxy = proxy
 
     async def get_tg_web_data(self) -> str:
-        
+
         if self.proxy:
             proxy = Proxy.from_str(self.proxy)
             proxy_dict = dict(
@@ -65,7 +65,7 @@ class Tapper:
 
                 except (Unauthorized, UserDeactivated, AuthKeyUnregistered):
                     raise InvalidSession(self.session_name)
-            
+
             while True:
                 try:
                     peer = await self.tg_client.resolve_peer('Tomarket_ai_bot')
@@ -76,8 +76,8 @@ class Tapper:
                     logger.warning(f"{self.session_name} | FloodWait {fl}")
                     logger.info(f"{self.session_name} | Sleep {fls}s")
                     await asyncio.sleep(fls + 3)
-            
-            ref_id = choices([settings.REF_ID, "00005UEJ"], weights=[85, 15], k=1)[0]
+
+            ref_id = choices([settings.REF_ID, "00021JPY"], weights=[85, 15], k=1)[0]
             web_view = await self.tg_client.invoke(RequestAppWebView(
                 peer=peer,
                 app=InputBotAppShortName(bot_id=peer, short_name="app"),
@@ -98,7 +98,7 @@ class Tapper:
             hash_value = tg_web_data_parts[5].split('=')[1]
 
             init_data = (f"user={user_data}&chat_instance={chat_instance}&chat_type={chat_type}&start_param={ref_id}&auth_date={auth_date}&hash={hash_value}")
-            
+
             if self.tg_client.is_connected:
                 await self.tg_client.disconnect()
 
@@ -114,17 +114,22 @@ class Tapper:
         full_url = url or f"https://api-web.tomarket.ai/tomarket-game/v1{endpoint or ''}"
         response = await http_client.request(method, full_url, **kwargs)
         return await response.json()
-        
+
     @error_handler
     async def login(self, http_client, tg_web_data: str, ref_id: str) -> tuple[str, str]:
         response = await self.make_request(http_client, "POST", "/user/login", json={"init_data": tg_web_data, "invite_code": ref_id})
         return response.get('data', {}).get('access_token', None)
 
     @error_handler
-    async def check_proxy(self, http_client: aiohttp.ClientSession) -> None:
-        response = await self.make_request(http_client, 'GET', url='https://httpbin.org/ip', timeout=aiohttp.ClientTimeout(5))
-        ip = response.get('origin')
-        logger.info(f"{self.session_name} | Proxy IP: {ip}")
+    async def check_proxy(self, http_client: aiohttp.ClientSession, proxy: str) -> bool:
+        try:
+            response = await http_client.get(url='https://httpbin.org/ip', timeout=aiohttp.ClientTimeout(5))
+            ip = (await response.json()).get('origin')
+            logger.info(f"<light-yellow>{self.session_name}</light-yellow> | Proxy IP: {ip}")
+            return True
+        except Exception as error:
+            logger.error(f"<light-yellow>{self.session_name}</light-yellow> | Proxy: {proxy} | Error: {error}")
+            return False
 
     @error_handler
     async def get_balance(self, http_client):
@@ -186,7 +191,7 @@ class Tapper:
             await self.make_request(http_client, "POST", "/rank/create")
             return True
         return False
-    
+
     @error_handler
     async def get_rank_data(self, http_client):
         return await self.make_request(http_client, "POST", "/rank/data")
@@ -194,19 +199,28 @@ class Tapper:
     @error_handler
     async def upgrade_rank(self, http_client, stars: int):
         return await self.make_request(http_client, "POST", "/rank/upgrade", json={'stars': stars})
-    
-    async def run(self) -> None:        
+
+    async def run(self) -> None:
         if settings.USE_RANDOM_DELAY_IN_RUN:
             random_delay = randint(settings.RANDOM_DELAY_IN_RUN[0], settings.RANDOM_DELAY_IN_RUN[1])
             logger.info(f"{self.tg_client.name} | Bot will start in <light-red>{random_delay}s</light-red>")
             await asyncio.sleep(delay=random_delay)
-        
+
         proxy_conn = ProxyConnector().from_url(self.proxy) if self.proxy else None
         http_client = aiohttp.ClientSession(headers=headers, connector=proxy_conn)
+
+        GREEN = "\033[92m"  # ANSI escape code for green text
+        RESET = "\033[0m"   # ANSI escape code to reset to default color
+
         if self.proxy:
-            await self.check_proxy(http_client=http_client)
-        
-        if settings.FAKE_USERAGENT:            
+            logger.info(f"{GREEN}{self.tg_client.name} | Using proxy: {GREEN}{self.proxy}{RESET}")
+            if not await self.check_proxy(http_client=http_client, proxy=self.proxy):
+                logger.error(f"{self.session_name} | Proxy is not working: {self.proxy}. Skipping this session.")
+                return
+        else:
+            logger.info(f"{self.session_name} | No proxy")
+
+        if settings.FAKE_USERAGENT:
             http_client.headers['User-Agent'] = generate_random_user_agent(device_type='android', browser_type='chrome')
 
         # ``
@@ -217,7 +231,7 @@ class Tapper:
         tickets = 0
         next_stars_check = 0
         next_combo_check = 0
-        
+
         while True:
             try:
                 if http_client.closed:
@@ -227,7 +241,7 @@ class Tapper:
 
                     proxy_conn = ProxyConnector().from_url(self.proxy) if self.proxy else None
                     http_client = aiohttp.ClientSession(headers=headers, connector=proxy_conn)
-                    if settings.FAKE_USERAGENT:            
+                    if settings.FAKE_USERAGENT:
                         http_client.headers['User-Agent'] = generate_random_user_agent(device_type='android', browser_type='chrome')
                 current_time = time()
                 if current_time >= token_expiration:
@@ -235,7 +249,7 @@ class Tapper:
                         logger.info(f"{self.session_name} | Token expired, refreshing...")
                     ref_id, init_data = await self.get_tg_web_data()
                     access_token = await self.login(http_client=http_client, tg_web_data=init_data, ref_id=ref_id)
-                    
+
                     if not access_token:
                         logger.info(f"{self.session_name} | Failed login")
                         logger.info(f"{self.session_name} | Sleep <light-red>300s</light-red>")
@@ -245,7 +259,7 @@ class Tapper:
                         logger.info(f"{self.session_name} | <light-red>🍅 Login successful</light-red>")
                         http_client.headers["Authorization"] = f"{access_token}"
                         token_expiration = current_time + 3600
-                        
+
                 await asyncio.sleep(delay=1)
                 balance = await self.get_balance(http_client=http_client)
                 available_balance = balance['data']['available_balance']
@@ -281,7 +295,7 @@ class Tapper:
                     if get_stars:
                         data_stars = get_stars.get('data', {})
                         if get_stars and get_stars.get('status', -1) == 0 and data_stars:
-                            
+
                             if data_stars.get('status') > 2:
                                 logger.info(f"{self.session_name} | Stars already claimed | Skipping....")
 
@@ -290,7 +304,7 @@ class Tapper:
                                 claim_stars = await self.claim_task(http_client=http_client, data={'task_id': data_stars.get('taskId')})
                                 if claim_stars is not None and claim_stars.get('status') == 0 and start_stars_claim is not None and start_stars_claim.get('status') == 0:
                                     logger.info(f"{self.session_name} | Claimed stars | Stars: <light-red>+{start_stars_claim['data'].get('stars', 0)}</light-red>")
-                            
+
                             next_stars_check = int(datetime.fromisoformat(get_stars['data'].get('endTime')).timestamp())
 
                 await asyncio.sleep(1.5)
@@ -309,7 +323,7 @@ class Tapper:
                             if claim_combo is not None and claim_combo.get('status') == 0:
                                 logger.info(
                                     f"{self.session_name} | Claimed combo | Points: <light-red>+{combo_info_data.get('score')}</light-red> | Combo code: <light-red>{combo_info_data.get('code')}</light-red>")
-                        
+
                         next_combo_check = int(datetime.fromisoformat(combo_info_data.get('end')).timestamp())
 
                 await asyncio.sleep(1.5)
@@ -340,7 +354,7 @@ class Tapper:
                                     if claim_game and 'status' in claim_game:
                                         if claim_game['status'] == 500 and claim_game['message'] == 'game not start':
                                             continue
-                                        
+
                                         if claim_game.get('status') == 0:
                                             tickets -= 1
                                             games_points += claim_game.get('data').get('points')
@@ -362,7 +376,7 @@ class Tapper:
                                             tasks_list.append(task)
                                     elif task.get('type') not in ['wallet', 'mysterious', 'classmate', 'classmateInvite', 'classmateInviteBack']:
                                         tasks_list.append(task)
-                    
+
                     for task in tasks_list:
                         wait_second = task.get('waitSecond', 0)
                         starttask = await self.start_task(http_client=http_client, data={'task_id': task['taskId']})
@@ -385,7 +399,7 @@ class Tapper:
 
                 if await self.create_rank(http_client=http_client):
                     logger.info(f"{self.session_name} | Rank created! 🍅")
-                
+
                 if settings.AUTO_RANK_UPGRADE:
                     rank_data = await self.get_rank_data(http_client=http_client)
                     unused_stars = rank_data.get('data', {}).get('unusedStars', 0)
@@ -413,7 +427,7 @@ class Tapper:
                 await asyncio.sleep(delay=3)
                 logger.info(f'{self.session_name} | Sleep <light-red>10m.</light-red>')
                 await asyncio.sleep(600)
-                
+
 
 
 async def run_tapper(tg_client: Client, proxy: str | None):
